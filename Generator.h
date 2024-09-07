@@ -1,13 +1,18 @@
 #include <coroutine>
 #include <iostream>
+#include <optional>
 
-template <typename T>
-  requires(std::is_integral_v<T>)
+template <typename Container>
 struct Generator {
   struct promise_type;
-  using Handle = std::coroutine_handle<promise_type>;
 
+  using T = typename Container::value_type;
+
+  // struct to hold the state of the coroutine
   struct promise_type {
+    promise_type() = default;
+    promise_type(Container& con) : end(con.end()) {}
+
     Generator get_return_object() {
       return Generator{Handle::from_promise(*this)};
     }
@@ -20,25 +25,27 @@ struct Generator {
       return {};
     }
 
+    std::suspend_always yield_value(Container::iterator val) noexcept {
+      iter = val;
+      return {};
+    }
+
     void return_void() {}
 
     void unhandled_exception() {
       throw;
     }
 
-    std::suspend_always yield_value(T val) {
-      value = std::move(val);
-      return {};
-    }
-
-    T value;
+    Container::iterator iter;
+    Container::iterator end;
   };
 
-  Generator(Handle handle) : handle_(std::move(handle)) {}
+  using Handle = std::coroutine_handle<promise_type>;
 
+  Generator(Handle coro) : coro_(std::move(coro)) {}
   ~Generator() {
-    if (handle_) {
-      handle_.destroy();
+    if (coro_) {
+      coro_.destroy();
     }
   }
 
@@ -46,50 +53,66 @@ struct Generator {
   Generator(const Generator&) = delete;
   Generator& operator=(const Generator&) = delete;
 
-  // move constructor
-  Generator(Generator&& other) : handle_(std::move(other.handle_)) {}
-
-  // move assignment operator
+  // movable
+  Generator(Generator&& other) : coro_(std::move(other.coro_)) {}
   Generator& operator=(Generator&& other) {
-    // destroy the handle first
-    if (handle_) {
-      handle_.destroy();
-      handle_ = {};
+    if (coro_) {
+      coro_.destroy();
+      coro_ = {};
     }
-    handle_ = std::move(other.handle_);
-    other.handle_ = {};
+
+    coro_ = std::move(other.coro_);
+    other.coro_ = {};
     return *this;
   }
 
-  bool next() {
-    if (handle_) {
-      handle_.resume();
-      return !handle_.done();
+  bool next() const {
+    if (coro_) {
+      coro_.resume();
+      return !coro_.done();
     }
+
     return false;
   }
 
-  T value() {
-    return handle_.promise().value;
-  }
-
-  void setState(T first, T last) {
-    // recreate the generator
-    if (handle_) {
-      handle_.destroy();
-      handle_ = {};
+  T value() const {
+    if (coro_) {
+      return *coro_.promise().iter;
     }
-    *this = range(first, last);
+    return {};
   }
 
-  static Generator range(T first, T last) {
-    T state = first;
-    while (state < last) {
-      co_yield state;
-      state++;
+  Container::iterator getState() const {
+    return iter_;
+  }
+
+  void setState(Container::iterator state) {
+    iter_ = state;
+    auto end = coro_.promise().end;
+    if (coro_) {
+      coro_.destroy();
+      coro_ = {};
+    }
+    *this = resumeFromState(iter_, end);
+  }
+
+  Generator resumeFromState(
+      Container::iterator start,
+      Container::iterator end) {
+    auto& iter = start;
+    while (iter != end) {
+      co_yield iter++;
+    }
+  }
+
+  static Generator range(Container& container) {
+    auto iter = container.begin();
+    while (iter != container.end()) {
+      co_yield iter++;
     }
   }
 
  private:
-  Handle handle_;
+  Handle coro_;
+  Container::iterator iter_;
 };

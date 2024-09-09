@@ -1,20 +1,27 @@
 #include <coroutine>
 #include <iostream>
-#include <optional>
+#include <iterator>
 
 template <typename Container>
-struct Generator {
+class Generator {
+ public:
   struct promise_type;
-
+  using Iter = typename Container::iterator;
   using T = typename Container::value_type;
+  using Coro = std::coroutine_handle<promise_type>;
 
-  // struct to hold the state of the coroutine
   struct promise_type {
-    promise_type() = default;
-    promise_type(Container& con) : end(con.end()) {}
+    promise_type() {
+      std::cout << "create the promise_type" << std::endl;
+    }
+
+    promise_type(Container& container)
+        : iter(container.begin()), end(container.end()) {
+      std::cout << "create the promise_type with container" << std::endl;
+    }
 
     Generator get_return_object() {
-      return Generator{Handle::from_promise(*this)};
+      return Generator{Coro::from_promise(*this)};
     }
 
     std::suspend_always initial_suspend() noexcept {
@@ -25,8 +32,8 @@ struct Generator {
       return {};
     }
 
-    std::suspend_always yield_value(Container::iterator val) noexcept {
-      iter = val;
+    std::suspend_always yield_value(Iter it) {
+      iter = it;
       return {};
     }
 
@@ -36,83 +43,116 @@ struct Generator {
       throw;
     }
 
-    Container::iterator iter;
-    Container::iterator end;
+    // store the state of the coroutine
+    Iter iter;
+    Iter end;
   };
 
-  using Handle = std::coroutine_handle<promise_type>;
+  Generator(Coro coro) : coro_(std::move(coro)) {}
 
-  Generator(Handle coro) : coro_(std::move(coro)) {}
   ~Generator() {
     if (coro_) {
       coro_.destroy();
     }
   }
 
-  // not copyable
+  // non copyable
   Generator(const Generator&) = delete;
   Generator& operator=(const Generator&) = delete;
 
-  // movable
+  // move constructible
   Generator(Generator&& other) : coro_(std::move(other.coro_)) {}
+
+  // move assignable
   Generator& operator=(Generator&& other) {
     if (coro_) {
       coro_.destroy();
       coro_ = {};
     }
-
     coro_ = std::move(other.coro_);
     other.coro_ = {};
     return *this;
   }
 
-  bool next() const {
-    if (coro_) {
-      coro_.resume();
-      return !coro_.done();
-    }
-
-    return false;
+  Iter getState() const {
+    return coro_.promise().iter;
   }
 
-  T value() const {
-    if (coro_) {
-      return *coro_.promise().iter;
-    }
-    return {};
-  }
-
-  Container::iterator getState() const {
-    return iter_;
-  }
-
-  void setState(Container::iterator state) {
-    iter_ = state;
+  void setState(Iter it) {
     auto end = coro_.promise().end;
     if (coro_) {
       coro_.destroy();
       coro_ = {};
     }
-    *this = resumeFromState(iter_, end);
+    std::cout << "recreate the generator " << std::endl;
+    *this = createGenerator(it, end);
   }
 
-  Generator resumeFromState(
-      Container::iterator start,
-      Container::iterator end) {
-    auto& iter = start;
-    while (iter != end) {
-      co_yield iter++;
+  bool hasNext() const {
+    if (!coro_ || coro_.done()) {
+      return false;
     }
+    coro_.resume();
+    return !coro_.done();
   }
 
-  static Generator range(Container& container) {
-    auto iter = container.begin();
-    while (iter != container.end()) {
-      co_yield iter++;
+  T next() const {
+    return *coro_.promise().iter;
+  }
+
+  struct Iterator {
+    Iterator(Coro coro) : coro_(std::move(coro)) {}
+
+    // *
+    const T& operator*() const {
+      return *coro_.promise().iter;
     }
+
+    // ++iter
+    Iterator& operator++() {
+      coro_.resume();
+      return coro_.promise().iter;
+    }
+
+    // iter++
+    Iterator operator++(int) {
+      Iterator it = *this;
+      coro_.resume();
+      return it;
+    }
+
+    // ==end
+    bool operator==(std::default_sentinel_t) {
+      return !coro_ || coro_.done();
+    }
+
+   private:
+    Coro coro_;
+  };
+
+  Iterator begin() {
+    return Iterator{coro_};
+  }
+
+  std::default_sentinel_t end() {
+    return {};
   }
 
  private:
-  Handle coro_;
-  Container::iterator iter_;
+  Generator createGenerator(Iter start, Iter end) {
+    Iter it = start;
+    while (it != end) {
+      co_yield it++;
+    }
+  }
+
+  Coro coro_;
 };
+
+template <typename Container>
+Generator<Container> range(Container& container) {
+  auto it = container.begin();
+  while (it != container.end()) {
+    co_yield it++;
+  }
+}

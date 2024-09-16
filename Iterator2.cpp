@@ -355,4 +355,26 @@ TEST_CASE( "MultiIterator: resume state", "[Iterator]" ) {
   REQUIRE(*val == 4);
 }
 
+TEST_CASE( "MultiIterator: resume state from begin", "[Iterator]" ) {
+  std::list<std::vector<int>> list = {{}, {}, {1}, {2, 3}, {4}, {}, {5,6}, {7}, {}, {}};
+  auto iter = MultiIterator(list);
+  auto state = iter.getState();
+  while (iter.next()) {}
+  iter.setState(state);
+  auto val = iter.next();
+  REQUIRE(val != std::nullopt);
+  REQUIRE(*val == 1);
+}
+
+TEST_CASE( "MultiIterator: resume state from end", "[Iterator]" ) {
+  std::list<std::vector<int>> list = {{}, {}, {1}, {2, 3}, {4}, {}, {5,6}, {7}, {}, {}};
+  auto iter = MultiIterator(list);
+  while (iter.next()) {}
+  auto state = iter.getState();
+  iter.setState(state);
+  auto val = iter.next();
+  REQUIRE(val == std::nullopt);
+}
+
+
 
